@@ -1,0 +1,446 @@
+
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
+
+from security import get_current_user
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/drivers",
+    tags=["Driver Management"]
+)
+
+
+# =====================================
+# REQUEST MODELS
+# =====================================
+
+class DriverApplication(BaseModel):
+    license_number: str = Field(
+        min_length=5,
+        max_length=30
+    )
+
+
+class DriverAvailabilityRequest(BaseModel):
+    is_online: bool
+
+
+# =====================================
+# USER SUPABASE CLIENT
+# =====================================
+
+def get_user_supabase(current_user):
+
+    client = getattr(
+        current_user,
+        "_gloigo_supabase",
+        None
+    )
+
+    if client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="User database connection unavailable"
+        )
+
+    return client
+
+
+# =====================================
+# CHECK DRIVER ELIGIBILITY
+# =====================================
+
+def require_eligible_driver(client):
+
+    try:
+        response = client.rpc(
+            "is_eligible_driver", {}
+        ).execute()
+
+        if response.data is not True:
+            raise HTTPException(
+                status_code=403,
+                detail="Driver must be approved, online and have an available van"
+            )
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("DRIVER ELIGIBILITY CHECK ERROR")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to verify driver availability"
+        )
+
+
+# =====================================
+# DRIVER APPLICATION
+# =====================================
+
+@router.post("/apply")
+def apply_as_driver(
+    data: DriverApplication,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    user_id = str(current_user.id)
+
+    try:
+        client.table("driver_profiles").insert({
+            "user_id": user_id,
+            "license_number": data.license_number.strip(),
+            "verification_status": "pending",
+            "is_online": False
+        }).execute()
+
+        return {
+            "message": "Driver application submitted successfully",
+            "user_id": user_id,
+            "verification_status": "pending"
+        }
+
+    except Exception:
+        logger.exception("DRIVER APPLICATION ERROR")
+
+        raise HTTPException(
+            status_code=400,
+            detail="Application failed. You may have already applied or the data is invalid."
+        )
+
+
+# =====================================
+# GET DRIVER APPLICATION
+# =====================================
+
+@router.get("/me")
+def get_driver_application(
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    try:
+        response = (
+            client.table("driver_profiles")
+            .select("*")
+            .eq("user_id", str(current_user.id))
+            .maybe_single()
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Driver application not found"
+            )
+
+        return response.data
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("DRIVER PROFILE ERROR")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to fetch driver application"
+        )
+
+
+# =====================================
+# DRIVER ONLINE / OFFLINE
+# =====================================
+
+@router.patch("/availability")
+def update_driver_availability(
+    data: DriverAvailabilityRequest,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    user_id = str(current_user.id)
+
+    try:
+        application = (
+            client.table("driver_profiles")
+            .select("verification_status, is_online")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+
+        if not application.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Driver application not found"
+            )
+
+        if application.data["verification_status"] != "approved":
+            raise HTTPException(
+                status_code=403,
+                detail="Admin approval required"
+            )
+
+        if data.is_online:
+
+            van = (
+                client.table("vans")
+                .select("id")
+                .eq("driver_id", user_id)
+                .eq("status", "available")
+                .limit(1)
+                .execute()
+            )
+
+            if not van.data:
+                raise HTTPException(
+                    status_code=409,
+                    detail="No operational van assigned. Contact admin."
+                )
+
+        response = (
+            client.table("driver_profiles")
+            .update({"is_online": data.is_online})
+            .eq("user_id", user_id)
+            .eq("verification_status", "approved")
+            .select(
+                "user_id, is_online, verification_status"
+            )
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=403,
+                detail="Unable to update availability"
+            )
+
+        return {
+            "message": (
+                "Driver is now online"
+                if data.is_online
+                else "Driver is now offline"
+            ),
+            "driver": response.data[0]
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("DRIVER AVAILABILITY ERROR")
+
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to update driver availability"
+        )
+
+
+# =====================================
+# GET PENDING BOOKINGS FOR DRIVER
+# =====================================
+
+@router.get("/bookings")
+def get_driver_bookings(
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    require_eligible_driver(client)
+
+    user_id = str(current_user.id)
+
+    try:
+        # Fetch pending customer bookings
+        response = (
+            client.table("bookings")
+            .select("*")
+            .eq("status", "pending")
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        bookings = response.data or []
+
+        # Fetch bookings previously rejected by this driver
+        rejected_response = (
+            client.table("driver_booking_responses")
+            .select("booking_id")
+            .eq("driver_id", user_id)
+            .execute()
+        )
+
+        rejected_ids = {
+            item["booking_id"]
+            for item in (rejected_response.data or [])
+        }
+
+        # Exclude requests rejected by this driver
+        available_bookings = [
+            booking
+            for booking in bookings
+            if booking["id"] not in rejected_ids
+        ]
+
+        return {
+            "message": "Driver bookings fetched successfully",
+            "count": len(available_bookings),
+            "bookings": available_bookings
+        }
+
+    except Exception:
+        logger.exception("DRIVER BOOKINGS ERROR")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to fetch driver bookings"
+        )
+
+
+# =====================================
+# ACCEPT BOOKING
+# =====================================
+
+@router.patch("/bookings/{booking_id}/accept")
+def accept_driver_booking(
+    booking_id: UUID,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    try:
+        response = client.rpc(
+            "accept_driver_booking",
+            {
+                "p_booking_id": str(booking_id)
+            }
+        ).execute()
+
+        return {
+            "message": "Booking accepted successfully",
+            "result": response.data
+        }
+
+    except Exception:
+        logger.exception("DRIVER BOOKING ACCEPT ERROR")
+
+        raise HTTPException(
+            status_code=409,
+            detail="Booking could not be accepted. It may already be assigned or unavailable."
+        )
+
+
+# =====================================
+# REJECT BOOKING
+# =====================================
+
+@router.patch("/bookings/{booking_id}/reject")
+def reject_driver_booking(
+    booking_id: UUID,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    try:
+        response = client.rpc(
+            "reject_driver_booking",
+            {
+                "p_booking_id": str(booking_id)
+            }
+        ).execute()
+
+        return {
+            "message": "Booking rejected for this driver",
+            "result": response.data
+        }
+
+    except Exception:
+        logger.exception("DRIVER BOOKING REJECT ERROR")
+
+        raise HTTPException(
+            status_code=409,
+            detail="Booking could not be rejected. It may no longer be available."
+        )
+
+
+# =====================================
+# START BOOKING
+# =====================================
+
+@router.patch("/bookings/{booking_id}/start")
+def start_driver_booking(
+    booking_id: UUID,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    try:
+        response = client.rpc(
+            "start_driver_booking",
+            {
+                "p_booking_id": str(booking_id)
+            }
+        ).execute()
+
+        return {
+            "message": "Booking started successfully",
+            "result": response.data
+        }
+
+    except Exception:
+        logger.exception("START BOOKING ERROR")
+
+        raise HTTPException(
+            status_code=409,
+            detail="Booking could not be started. Check assignment and booking status."
+        )
+
+
+# =====================================
+# COMPLETE BOOKING
+# =====================================
+
+@router.patch("/bookings/{booking_id}/complete")
+def complete_driver_booking(
+    booking_id: UUID,
+    current_user=Depends(get_current_user)
+):
+
+    client = get_user_supabase(current_user)
+
+    try:
+        response = client.rpc(
+            "complete_driver_booking",
+            {
+                "p_booking_id": str(booking_id)
+            }
+        ).execute()
+
+        return {
+            "message": "Booking completed successfully",
+            "result": response.data
+        }
+
+    except Exception:
+        logger.exception("COMPLETE BOOKING ERROR")
+
+        raise HTTPException(
+            status_code=409,
+            detail="Booking could not be completed. Check assignment and booking status."
+        )

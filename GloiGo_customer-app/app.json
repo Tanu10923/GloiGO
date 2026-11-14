@@ -1,0 +1,26 @@
+
+{
+  "expo": {
+    "name": "GloiGO",
+    "slug": "gloigo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/gloigo-logo.png",
+    "android": {
+      "package": "com.gloigo.customer",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location helps GloiGO provide convenient and efficient assistance."
+        }
+      ]
+    ]
+  }
+}

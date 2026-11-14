@@ -1,0 +1,27 @@
+
+# Dependencies
+node_modules/
+
+# Build files
+dist/
+build/
+
+# Expo cache
+.expo/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

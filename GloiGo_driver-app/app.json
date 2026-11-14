@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "GloiGO Driver",
+    "slug": "gloigo-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.gloigo.driver",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "GloiGO Driver uses your location to share your live position while you are online and coordinate assigned bookings."
+        }
+      ]
+    ]
+  }
+}
