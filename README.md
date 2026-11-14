@@ -202,7 +202,7 @@ npm install
 Configure the backend URL in `.env`:
 
 ```env
-EXPO_PUBLIC_API_BASE_URL=http://YOUR_BACKEND_IP:8000
+EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:8000
 ```
 
 Start the application:
