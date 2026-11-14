@@ -147,7 +147,7 @@ GloiGO/
 ### 1. Clone the Repository
 
 ```bash
-git clone YOUR_REPOSITORY_URL
+git clone https://github.com/Tanu10923/GloiGO.git
 cd GloiGO
 ```
 
@@ -177,7 +177,7 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Configure your backend `.env` file using `.env.example`.
+Configure your backend `.env` file using `.env`.
 
 Start the backend:
 
